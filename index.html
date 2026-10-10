@@ -1,0 +1,84 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>choice-search</title>
+<style>
+body { font-family: system-ui, sans-serif; max-width: 800px; margin: 2rem auto; padding: 0 1rem; }
+form { display: flex; gap: .5rem; }
+input { flex: 1; padding: .5rem; font-size: 1rem; }
+button { padding: .5rem 1rem; font-size: 1rem; cursor: pointer; }
+.card { display: flex; gap: 1rem; border: 1px solid #ddd; border-radius: 8px; padding: .75rem; margin: .75rem 0; }
+.card img { width: 96px; height: 96px; object-fit: contain; flex-shrink: 0; }
+.price { font-weight: bold; font-size: 1.1rem; }
+.badge { display: inline-block; background: #e8f5e9; border: 1px solid #a5d6a7; border-radius: 4px; padding: 0 .4rem; margin-right: .3rem; font-size: .85rem; }
+.meta { color: #555; font-size: .9rem; }
+.fallback { background: #fff8e1; border: 1px solid #ffe082; border-radius: 8px; padding: 1rem; margin-top: 1rem; }
+</style>
+</head>
+<body>
+<h1>choice-search</h1>
+<form id="f">
+<input id="q" type="search" placeholder="Rechercher (ex : esp32)" required autofocus>
+<button type="submit">Chercher</button>
+</form>
+<div id="status" role="status"></div>
+<div id="results"></div>
+<script>
+const f = document.getElementById('f');
+const q = document.getElementById('q');
+const status = document.getElementById('status');
+const results = document.getElementById('results');
+
+function card(p) {
+  const el = document.createElement('div');
+  el.className = 'card';
+  const badges = [];
+  if (p.choice) badges.push('<span class="badge">Choice</span>');
+  if (p.freeShipping) badges.push('<span class="badge">Livraison gratuite</span>');
+  el.innerHTML =
+    (p.image ? '<img loading="lazy" alt="">' : '') +
+    '<div><a target="_blank" rel="noopener"></a>' +
+    '<div class="price"></div>' +
+    '<div class="meta"></div>' +
+    '<div class="badges">' + badges.join('') + '</div></div>';
+  if (p.image) el.querySelector('img').src = p.image;
+  const a = el.querySelector('a');
+  a.href = p.link; a.textContent = p.title;
+  el.querySelector('.price').textContent = p.price.toFixed(2) + ' ' + (p.currency || 'EUR');
+  const meta = [];
+  if (p.rating) meta.push('★ ' + p.rating);
+  if (p.sales != null) meta.push(p.sales + ' ventes');
+  el.querySelector('.meta').textContent = meta.join(' · ');
+  return el;
+}
+
+f.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const query = q.value.trim();
+  if (!query) return;
+  results.innerHTML = '';
+  status.textContent = 'Recherche…';
+  try {
+    const r = await fetch('/api/search?q=' + encodeURIComponent(query));
+    const data = await r.json();
+    if (data.fallback) {
+      status.textContent = '';
+      const d = document.createElement('div');
+      d.className = 'fallback';
+      d.innerHTML = '<p>Résultats directs indisponibles (protection anti-bot).<br><a target="_blank" rel="noopener">Ouvrir la recherche filtrée sur AliExpress</a></p>';
+      d.querySelector('a').href = data.url;
+      results.appendChild(d);
+      return;
+    }
+    const items = data.results || [];
+    status.textContent = items.length + ' résultat(s)';
+    for (const p of items) results.appendChild(card(p));
+  } catch (err) {
+    status.textContent = 'Erreur réseau : ' + err.message;
+  }
+});
+</script>
+</body>
+</html>
