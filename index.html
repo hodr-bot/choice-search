@@ -28,92 +28,94 @@ button { padding: .5rem 1rem; font-size: 1rem; cursor: pointer; }
 <input id="q" type="search" placeholder="Search (e.g. esp32)" required autofocus>
 <button type="submit">Search</button>
 </form>
-<p class="hint">Free-shipping single items only; bundle / lot / pack titles are excluded.</p>
-<noscript><p><a href="https://www.aliexpress.com/wholesale?SearchText=esp32&amp;currency=USD&amp;g=y">Example: filtered "esp32" search on AliExpress</a></p></noscript>
+<p class="hint">Single items only; ads, bundle links and bundle / lot / pack titles are excluded.</p>
+<noscript><p><a href="https://www.aliexpress.com/wholesale?SearchText=esp32&amp;g=y">Example: "esp32" search on AliExpress</a></p></noscript>
 <div class="status" id="status" role="status" aria-live="polite" hidden></div>
 <div class="results" id="results" aria-live="polite"></div>
 <script>
 const BASE = 'https://www.aliexpress.com/wholesale';
-const PROXY = 'https://api.allorigins.win/get?url=';
+const JINA = 'https://r.jina.ai/';
 const f = document.getElementById('f');
 const q = document.getElementById('q');
 const status = document.getElementById('status');
 const results = document.getElementById('results');
 
-// Adapted from the former server.py BUNDLE_RE (bundle packs without a clear unit price).
+// Same bundle-pack title filter as before (packs without a clear unit price).
 const BUNDLE_RE = /bundle|\blot\b|\blots\b|x\s?\d+\s?(pcs|pieces|pack)|\d+\s?(pcs|pieces)\b|pack\s?deal|set\s?of|wholesale\s?lot/i;
 
 function searchUrl(query) {
-  const params = new URLSearchParams({ SearchText: query, currency: 'USD', g: 'y' });
+  const params = new URLSearchParams({ SearchText: query, g: 'y' });
   return BASE + '?' + params.toString();
 }
 
-function pick(d, ...keys) {
-  for (const k of keys) {
-    if (d && d[k] !== undefined && d[k] !== null && d[k] !== '') return d[k];
-  }
-  return undefined;
+// Sponsored placement: Jina keeps the tracking parameter in the product URL.
+function isAd(url) {
+  return url.includes('aem_p4p_detail');
 }
 
-function asFloat(v) {
-  if (typeof v === 'number') return v;
-  if (v === undefined || v === null) return null;
-  const s = String(v).replace(/[^\d.,]/g, '').replace(',', '.');
-  const n = parseFloat(s);
-  return Number.isFinite(n) ? n : null;
+// Bundle-deal links (ssr/BundleDeals) carry no /item/<id>.html: not buyable directly.
+function isBundleLink(url) {
+  return !/\/item\/(\d+)\.html/.test(url);
 }
 
-function normalizeItem(d) {
-  if (!d || typeof d !== 'object') return null;
-  const pid = pick(d, 'productId', 'productid', 'id', 'itemId');
-  const rawTitle = pick(d, 'productTitle', 'title', 'subject', 'name');
-  if (pid === undefined || rawTitle === undefined) return null;
-  const title = String(rawTitle).trim();
+// Most Jina lines show no shipping info at all, so a missing mention means
+// "unknown", not "paid". Only an explicit paid-shipping price excludes the item.
+function hasPaidShipping(line) {
+  return /Shipping:\s*\$|\+\s*\$\d[\d.]*\s*shipping/i.test(line);
+}
+
+// One Jina Reader markdown line per product:
+// [![Image N: TITLE](FIRST_AE_PIC_URL) ... ### TITLE $PRICE ... META ...](PRODUCT_URL)
+function parseProductLine(line) {
+  const links = [...line.matchAll(/\]\((https:\/\/[^)]+)\)/g)].map((m) => m[1]);
+  if (!links.length) return null;
+  const productUrl = links[links.length - 1]; // last link = the product page
+  if (isAd(productUrl)) return null;
+  const idMatch = /\/item\/(\d+)\.html/.exec(productUrl);
+  if (!idMatch) return null;
+  const titleMatch = /###\s*([^$]+?)\s*\$/.exec(line);
+  if (!titleMatch) return null;
+  const title = titleMatch[1].trim();
   if (!title || BUNDLE_RE.test(title)) return null;
-  const price = asFloat(pick(d, 'salePrice', 'price', 'finalPrice', 'targetSalePrice', 'sale_price', 'minPrice'));
-  if (price === null) return null;
-  let img = pick(d, 'productImage', 'image', 'imageUrl', 'picUrl', 'imgUrl');
-  img = typeof img === 'string'
-    ? (img.startsWith('http') ? img : 'https:' + img)
-    : null;
-  const rating = asFloat(pick(d, 'rating', 'averageStar', 'evaluateRate', 'star'));
-  const salesRaw = pick(d, 'tradeCount', 'sales', 'sold', 'orders', 'totalSale');
-  const sales = salesRaw !== undefined ? parseInt(String(salesRaw).replace(/[^\d]/g, ''), 10) : NaN;
-  const blob = JSON.stringify(d).toLowerCase();
-  const choice = blob.includes('choice') || blob.includes('choice_day') || blob.includes('superdeals');
-  const freeShipping = blob.includes('free_shipping') || blob.includes('freeshipping') || blob.includes('free shipping');
-  if (!freeShipping) return null;
+  const afterTitle = line.slice(titleMatch.index + titleMatch[0].length - 1);
+  const priceMatch = /\$([\d.]+)/.exec(afterTitle);
+  if (!priceMatch) return null;
+  const price = parseFloat(priceMatch[1]);
+  if (!Number.isFinite(price)) return null;
+  if (hasPaidShipping(line)) return null;
+  const imgMatch = /https:\/\/ae-pic-[^\s)]+/.exec(line); // first ae-pic URL = product image
+  const rest = afterTitle.slice(priceMatch.index + priceMatch[0].length);
+  // Rating: first decimal NOT starting right after "$" (skips $1.09 / $5.00 style prices).
+  const ratingMatch = /(?<!\$)(\d\.\d)/.exec(rest);
+  const soldMatch = /([\d,+]+\s*sold|\d+\s*sold)/i.exec(rest);
   const item = {
-    id: String(pid),
+    id: idMatch[1],
     title,
     price: Math.round(price * 100) / 100,
-    currency: 'USD',
-    link: 'https://www.aliexpress.com/item/' + pid + '.html',
-    choice,
-    freeShipping: true
+    currency: 'USD', // fixed: the endpoint serves aliexpress.us
+    link: 'https://www.aliexpress.com/item/' + idMatch[1] + '.html',
+    choice: /choice/i.test(line),
+    freeShipping: /free shipping/i.test(line)
   };
-  if (img) item.image = img;
-  if (rating) item.rating = rating;
-  if (Number.isFinite(sales)) item.sales = sales;
+  if (imgMatch) item.image = imgMatch[0];
+  if (ratingMatch) item.rating = parseFloat(ratingMatch[1]);
+  if (soldMatch) {
+    const n = parseInt(soldMatch[1].replace(/[^\d]/g, ''), 10);
+    if (Number.isFinite(n)) item.sales = n;
+  }
   return item;
 }
 
-function extractProducts(pageHtml) {
-  const found = [];
-  const re = /\{[^{}]*?(?:productId|product[idI]|itemId)[^{}]*?\}/g;
-  let m;
-  while ((m = re.exec(pageHtml)) !== null) {
-    let d;
-    try { d = JSON.parse(m[0]); } catch { continue; }
-    const item = normalizeItem(d);
-    if (item) found.push(item);
-  }
+function parseJinaMarkdown(text) {
   const seen = new Set();
   const out = [];
-  for (const it of found) {
-    if (!seen.has(it.id)) {
-      seen.add(it.id);
-      out.push(it);
+  for (const raw of String(text).split('\n')) {
+    const line = raw.trim();
+    if (!line.includes('###') || !line.includes('](')) continue;
+    const item = parseProductLine(line);
+    if (item && !seen.has(item.id)) {
+      seen.add(item.id);
+      out.push(item);
       if (out.length >= 30) break;
     }
   }
@@ -132,12 +134,12 @@ function showFallback(query) {
   const div = document.createElement('div');
   div.className = 'error';
   const p = document.createElement('p');
-  p.textContent = 'Search is temporarily unavailable (the proxy or AliExpress blocked the request). No results were invented.';
+  p.textContent = 'Search is temporarily unavailable (the reader service or AliExpress blocked the request). No results were invented.';
   const a = document.createElement('a');
   a.href = url;
   a.target = '_blank';
   a.rel = 'noopener';
-  a.textContent = 'Open filtered search on AliExpress';
+  a.textContent = 'Open search on AliExpress';
   div.appendChild(p);
   div.appendChild(a);
   results.appendChild(div);
@@ -180,14 +182,16 @@ function render(items) {
       b.textContent = 'Choice';
       badges.appendChild(b);
     }
-    const fs = document.createElement('span');
-    fs.className = 'badge';
-    fs.textContent = 'Free shipping';
-    badges.appendChild(fs);
+    if (it.freeShipping) {
+      const fs = document.createElement('span');
+      fs.className = 'badge';
+      fs.textContent = 'Free shipping';
+      badges.appendChild(fs);
+    }
     card.appendChild(a);
     card.appendChild(price);
     if (meta.textContent) card.appendChild(meta);
-    card.appendChild(badges);
+    if (badges.children.length) card.appendChild(badges);
     results.appendChild(card);
   }
 }
@@ -196,26 +200,19 @@ async function runSearch(query) {
   setStatus('Searching…');
   results.innerHTML = '';
   const url = searchUrl(query);
-  let html = '';
+  let text = '';
   try {
-    const res = await fetch(PROXY + encodeURIComponent(url));
-    if (!res.ok) throw new Error('proxy status ' + res.status);
-    const data = await res.json();
-    html = data && data.contents ? data.contents : '';
-    if (!html) throw new Error('empty proxy response');
+    const res = await fetch(JINA + url, { headers: { Accept: 'text/plain' } });
+    if (!res.ok) throw new Error('reader status ' + res.status);
+    text = await res.text();
+    if (!text) throw new Error('empty reader response');
   } catch {
-    showFallback(query);
-    return;
-  }
-  const low = html.slice(0, 5000).toLowerCase();
-  if (low.includes('captcha') || low.includes('slide to verify') ||
-      (low.includes('login') && !low.includes('productid'))) {
     showFallback(query);
     return;
   }
   let items = [];
   try {
-    items = extractProducts(html);
+    items = parseJinaMarkdown(text);
   } catch {
     items = [];
   }
