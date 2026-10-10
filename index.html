@@ -28,12 +28,12 @@ button { padding: .5rem 1rem; font-size: 1rem; cursor: pointer; }
 <input id="q" type="search" placeholder="Search (e.g. esp32)" required autofocus>
 <button type="submit">Search</button>
 </form>
-<p class="hint">Single items only; ads, bundle links and bundle / lot / pack titles are excluded.</p>
-<noscript><p><a href="https://www.aliexpress.com/wholesale?SearchText=esp32&amp;g=y">Example: "esp32" search on AliExpress</a></p></noscript>
+<p class="hint">Single items only; ads, bundle links and bundle / lot / pack titles are excluded. Prices in USD (US listing — final price on product page).</p>
+<noscript><p><a href="https://fr.aliexpress.com/w/wholesale-esp32.html?SearchText=esp32&amp;g=y">Example: "esp32" search on AliExpress</a></p></noscript>
 <div class="status" id="status" role="status" aria-live="polite" hidden></div>
 <div class="results" id="results" aria-live="polite"></div>
 <script>
-const BASE = 'https://www.aliexpress.com/wholesale';
+const BASE = 'https://fr.aliexpress.com/w';
 const JINA = 'https://r.jina.ai/';
 const f = document.getElementById('f');
 const q = document.getElementById('q');
@@ -44,18 +44,14 @@ const results = document.getElementById('results');
 const BUNDLE_RE = /bundle|\blot\b|\blots\b|x\s?\d+\s?(pcs|pieces|pack)|\d+\s?(pcs|pieces)\b|pack\s?deal|set\s?of|wholesale\s?lot/i;
 
 function searchUrl(query) {
+  const slug = query.trim().toLowerCase().split(/[^a-z0-9]+/).filter(Boolean).join('-') || 'products';
   const params = new URLSearchParams({ SearchText: query, g: 'y' });
-  return BASE + '?' + params.toString();
+  return BASE + '/wholesale-' + slug + '.html?' + params.toString();
 }
 
 // Sponsored placement: Jina keeps the tracking parameter in the product URL.
 function isAd(url) {
   return url.includes('aem_p4p_detail');
-}
-
-// Bundle-deal links (ssr/BundleDeals) carry no /item/<id>.html: not buyable directly.
-function isBundleLink(url) {
-  return !/\/item\/(\d+)\.html/.test(url);
 }
 
 // Most Jina lines show no shipping info at all, so a missing mention means
@@ -64,6 +60,26 @@ function hasPaidShipping(line) {
   return /Shipping:\s*\$|\+\s*\$\d[\d.]*\s*shipping/i.test(line);
 }
 
+// Jina mirrors the aliexpress.US page: the "$X" in the markdown is often the
+// "welcome deal" (new-shopper) price, while pdp_npi in the product URL carries
+// both amounts: pdp_npi=...!USD!<ORIG>!<SALE>... (URL-encoded as %21, %40).
+// ORIG (first) is the regular price, SALE (second) the new-shopper one, so the
+// true price is ORIG, never the markdown "$".
+function priceFromPdpNpi(url) {
+  let s = url;
+  try { s = decodeURIComponent(url); } catch { /* keep raw */ }
+  const m = /pdp_npi=[^!\s]*!USD!([\d.]+)!([\d.]+)/.exec(s);
+  if (!m) return null;
+  const orig = parseFloat(m[1]);
+  const sale = parseFloat(m[2]);
+  if (!Number.isFinite(orig)) return null;
+  return { price: Math.round(orig * 100) / 100, welcome: Number.isFinite(sale) && sale < orig };
+}
+
+// Soft deliverability filter: exclude only explicit not-shipping mentions.
+// A missing shipping mention means "unknown", not "undeliverable".
+const NOT_SHIP_RE = /does not ship|not deliver|not available in/i;
+
 // One Jina Reader markdown line per product:
 // [![Image N: TITLE](FIRST_AE_PIC_URL) ... ### TITLE $PRICE ... META ...](PRODUCT_URL)
 function parseProductLine(line) {
@@ -71,6 +87,7 @@ function parseProductLine(line) {
   if (!links.length) return null;
   const productUrl = links[links.length - 1]; // last link = the product page
   if (isAd(productUrl)) return null;
+  if (productUrl.includes('BundleDeals')) return null; // belt and braces: bundle links are never directly buyable
   const idMatch = /\/item\/(\d+)\.html/.exec(productUrl);
   if (!idMatch) return null;
   const titleMatch = /###\s*([^$]+?)\s*\$/.exec(line);
@@ -80,7 +97,10 @@ function parseProductLine(line) {
   const afterTitle = line.slice(titleMatch.index + titleMatch[0].length - 1);
   const priceMatch = /\$([\d.]+)/.exec(afterTitle);
   if (!priceMatch) return null;
-  const price = parseFloat(priceMatch[1]);
+  if (NOT_SHIP_RE.test(line)) return null;
+  // True price first: ORIG from pdp_npi; markdown "$" fallback flagged as a possible welcome price.
+  const npi = priceFromPdpNpi(productUrl);
+  const price = npi ? npi.price : parseFloat(priceMatch[1]);
   if (!Number.isFinite(price)) return null;
   if (hasPaidShipping(line)) return null;
   const imgMatch = /https:\/\/ae-pic-[^\s)]+/.exec(line); // first ae-pic URL = product image
@@ -92,8 +112,9 @@ function parseProductLine(line) {
     id: idMatch[1],
     title,
     price: Math.round(price * 100) / 100,
-    currency: 'USD', // fixed: the endpoint serves aliexpress.us
+    currency: 'USD', // listings serve USD prices
     link: 'https://www.aliexpress.com/item/' + idMatch[1] + '.html',
+    welcomePrice: !npi,
     choice: /choice/i.test(line),
     freeShipping: /free shipping/i.test(line)
   };
@@ -167,12 +188,12 @@ function render(items) {
     a.textContent = it.title;
     const price = document.createElement('div');
     price.className = 'price';
-    price.textContent = it.price.toFixed(2) + ' ' + it.currency;
+    price.textContent = (it.welcomePrice ? 'from ' : '') + it.price.toFixed(2) + ' ' + it.currency;
     const meta = document.createElement('div');
     meta.className = 'meta';
-    const bits = [];
     if (it.rating) bits.push('Rating: ' + it.rating);
     if (it.sales !== undefined) bits.push(it.sales + ' sold');
+    if (it.welcomePrice) bits.push('New-shopper price, check listing');
     meta.textContent = bits.join(' · ');
     const badges = document.createElement('div');
     badges.className = 'badges';
