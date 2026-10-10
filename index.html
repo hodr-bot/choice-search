@@ -9,12 +9,9 @@ body { font-family: system-ui, sans-serif; max-width: 800px; margin: 2rem auto; 
 form { display: flex; gap: .5rem; }
 input { flex: 1; padding: .5rem; font-size: 1rem; }
 button { padding: .5rem 1rem; font-size: 1rem; cursor: pointer; }
-.card { display: flex; gap: 1rem; border: 1px solid #ddd; border-radius: 8px; padding: .75rem; margin: .75rem 0; }
-.card img { width: 96px; height: 96px; object-fit: contain; flex-shrink: 0; }
-.price { font-weight: bold; font-size: 1.1rem; }
-.badge { display: inline-block; background: #e8f5e9; border: 1px solid #a5d6a7; border-radius: 4px; padding: 0 .4rem; margin-right: .3rem; font-size: .85rem; }
-.meta { color: #555; font-size: .9rem; }
-.fallback { background: #fff8e1; border: 1px solid #ffe082; border-radius: 8px; padding: 1rem; margin-top: 1rem; }
+.links { margin-top: 1rem; display: grid; gap: .5rem; }
+.links a { display: block; }
+.hint { color: #555; font-size: .9rem; }
 </style>
 </head>
 <body>
@@ -23,61 +20,49 @@ button { padding: .5rem 1rem; font-size: 1rem; cursor: pointer; }
 <input id="q" type="search" placeholder="Rechercher (ex : esp32)" required autofocus>
 <button type="submit">Chercher</button>
 </form>
-<div id="status" role="status"></div>
-<div id="results"></div>
+<p class="hint">Ajoutez au panier directement sur AliExpress via le lien de recherche filtrée (expédition depuis la France).</p>
+<noscript><p><a href="https://www.aliexpress.com/wholesale?SearchText=esp32&amp;shipFromCountry=FR&amp;g=y">Exemple : recherche « esp32 » filtrée France sur AliExpress</a></p></noscript>
+<div class="links" id="links" hidden></div>
 <script>
+const BASE = 'https://www.aliexpress.com/wholesale';
 const f = document.getElementById('f');
 const q = document.getElementById('q');
-const status = document.getElementById('status');
-const results = document.getElementById('results');
+const links = document.getElementById('links');
 
-function card(p) {
-  const el = document.createElement('div');
-  el.className = 'card';
-  const badges = [];
-  if (p.choice) badges.push('<span class="badge">Choice</span>');
-  if (p.freeShipping) badges.push('<span class="badge">Livraison gratuite</span>');
-  el.innerHTML =
-    (p.image ? '<img loading="lazy" alt="">' : '') +
-    '<div><a target="_blank" rel="noopener"></a>' +
-    '<div class="price"></div>' +
-    '<div class="meta"></div>' +
-    '<div class="badges">' + badges.join('') + '</div></div>';
-  if (p.image) el.querySelector('img').src = p.image;
-  const a = el.querySelector('a');
-  a.href = p.link; a.textContent = p.title;
-  el.querySelector('.price').textContent = p.price.toFixed(2) + ' ' + (p.currency || 'EUR');
-  const meta = [];
-  if (p.rating) meta.push('★ ' + p.rating);
-  if (p.sales != null) meta.push(p.sales + ' ventes');
-  el.querySelector('.meta').textContent = meta.join(' · ');
-  return el;
+function searchUrl(query, extra) {
+  const params = new URLSearchParams({
+    SearchText: query,
+    shipFromCountry: 'FR',
+    g: 'y'
+  });
+  if (extra) for (const [k, v] of Object.entries(extra)) params.set(k, v);
+  return BASE + '?' + params.toString();
 }
 
-f.addEventListener('submit', async (e) => {
+function showLinks(query) {
+  const defs = [
+    ['Recherche filtrée (France)', searchUrl(query)],
+    ['Choice : « ' + query + ' choice »', searchUrl(query + ' choice')],
+    ['Triés par commandes', searchUrl(query, { SortType: 'total_tranpro_desc' })]
+  ];
+  links.innerHTML = '';
+  for (const [label, href] of defs) {
+    const a = document.createElement('a');
+    a.target = '_blank';
+    a.rel = 'noopener';
+    a.href = href;
+    a.textContent = label;
+    links.appendChild(a);
+  }
+  links.hidden = false;
+}
+
+f.addEventListener('submit', (e) => {
   e.preventDefault();
   const query = q.value.trim();
   if (!query) return;
-  results.innerHTML = '';
-  status.textContent = 'Recherche…';
-  try {
-    const r = await fetch('/api/search?q=' + encodeURIComponent(query));
-    const data = await r.json();
-    if (data.fallback) {
-      status.textContent = '';
-      const d = document.createElement('div');
-      d.className = 'fallback';
-      d.innerHTML = '<p>Résultats directs indisponibles (protection anti-bot).<br><a target="_blank" rel="noopener">Ouvrir la recherche filtrée sur AliExpress</a></p>';
-      d.querySelector('a').href = data.url;
-      results.appendChild(d);
-      return;
-    }
-    const items = data.results || [];
-    status.textContent = items.length + ' résultat(s)';
-    for (const p of items) results.appendChild(card(p));
-  } catch (err) {
-    status.textContent = 'Erreur réseau : ' + err.message;
-  }
+  showLinks(query);
+  window.open(searchUrl(query), '_blank', 'noopener');
 });
 </script>
 </body>
