@@ -30,8 +30,8 @@ button { padding: .5rem 1rem; font-size: 1rem; cursor: pointer; }
 </form>
 <p class="hint">Free-shipping single items only; bundle / lot / pack titles are excluded.</p>
 <noscript><p><a href="https://www.aliexpress.com/wholesale?SearchText=esp32&amp;currency=USD&amp;g=y">Example: filtered "esp32" search on AliExpress</a></p></noscript>
-<div class="status" id="status" role="status" hidden></div>
-<div class="results" id="results"></div>
+<div class="status" id="status" role="status" aria-live="polite" hidden></div>
+<div class="results" id="results" aria-live="polite"></div>
 <script>
 const BASE = 'https://www.aliexpress.com/wholesale';
 const PROXY = 'https://api.allorigins.win/get?url=';
@@ -153,6 +153,8 @@ function render(items) {
       img.src = it.image;
       img.alt = '';
       img.loading = 'lazy';
+      img.referrerPolicy = 'no-referrer';
+      img.addEventListener('error', () => img.remove());
       card.appendChild(img);
     }
     const a = document.createElement('a');
