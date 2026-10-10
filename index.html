@@ -1,68 +1,235 @@
 <!DOCTYPE html>
-<html lang="fr">
+<html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>choice-search</title>
 <style>
-body { font-family: system-ui, sans-serif; max-width: 800px; margin: 2rem auto; padding: 0 1rem; }
+body { font-family: system-ui, sans-serif; max-width: 900px; margin: 2rem auto; padding: 0 1rem; }
 form { display: flex; gap: .5rem; }
 input { flex: 1; padding: .5rem; font-size: 1rem; }
 button { padding: .5rem 1rem; font-size: 1rem; cursor: pointer; }
-.links { margin-top: 1rem; display: grid; gap: .5rem; }
-.links a { display: block; }
 .hint { color: #555; font-size: .9rem; }
+.status { margin-top: 1rem; }
+.results { margin-top: 1rem; display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 1rem; }
+.card { border: 1px solid #ddd; border-radius: 8px; padding: .75rem; display: flex; flex-direction: column; gap: .4rem; }
+.card img { width: 100%; height: 160px; object-fit: contain; background: #f7f7f7; border-radius: 4px; }
+.card .title { font-size: .9rem; }
+.card .price { font-weight: bold; }
+.card .meta { color: #555; font-size: .8rem; }
+.badges { display: flex; gap: .4rem; flex-wrap: wrap; }
+.badge { font-size: .75rem; background: #eef; border-radius: 4px; padding: .1rem .4rem; }
+.error a { display: inline-block; margin-top: .5rem; }
 </style>
 </head>
 <body>
 <h1>choice-search</h1>
 <form id="f">
-<input id="q" type="search" placeholder="Rechercher (ex : esp32)" required autofocus>
-<button type="submit">Chercher</button>
+<input id="q" type="search" placeholder="Search (e.g. esp32)" required autofocus>
+<button type="submit">Search</button>
 </form>
-<p class="hint">Ajoutez au panier directement sur AliExpress via le lien de recherche filtrée (expédition depuis la France).</p>
-<noscript><p><a href="https://www.aliexpress.com/wholesale?SearchText=esp32&amp;shipFromCountry=FR&amp;g=y">Exemple : recherche « esp32 » filtrée France sur AliExpress</a></p></noscript>
-<div class="links" id="links" hidden></div>
+<p class="hint">Free-shipping single items only; bundle / lot / pack titles are excluded.</p>
+<noscript><p><a href="https://www.aliexpress.com/wholesale?SearchText=esp32&amp;currency=USD&amp;g=y">Example: filtered "esp32" search on AliExpress</a></p></noscript>
+<div class="status" id="status" role="status" hidden></div>
+<div class="results" id="results"></div>
 <script>
 const BASE = 'https://www.aliexpress.com/wholesale';
+const PROXY = 'https://api.allorigins.win/get?url=';
 const f = document.getElementById('f');
 const q = document.getElementById('q');
-const links = document.getElementById('links');
+const status = document.getElementById('status');
+const results = document.getElementById('results');
 
-function searchUrl(query, extra) {
-  const params = new URLSearchParams({
-    SearchText: query,
-    shipFromCountry: 'FR',
-    g: 'y'
-  });
-  if (extra) for (const [k, v] of Object.entries(extra)) params.set(k, v);
+// Adapted from the former server.py BUNDLE_RE (bundle packs without a clear unit price).
+const BUNDLE_RE = /bundle|\blot\b|\blots\b|x\s?\d+\s?(pcs|pieces|pack)|\d+\s?(pcs|pieces)\b|pack\s?deal|set\s?of|wholesale\s?lot/i;
+
+function searchUrl(query) {
+  const params = new URLSearchParams({ SearchText: query, currency: 'USD', g: 'y' });
   return BASE + '?' + params.toString();
 }
 
-function showLinks(query) {
-  const defs = [
-    ['Recherche filtrée (France)', searchUrl(query)],
-    ['Choice : « ' + query + ' choice »', searchUrl(query + ' choice')],
-    ['Triés par commandes', searchUrl(query, { SortType: 'total_tranpro_desc' })]
-  ];
-  links.innerHTML = '';
-  for (const [label, href] of defs) {
+function pick(d, ...keys) {
+  for (const k of keys) {
+    if (d && d[k] !== undefined && d[k] !== null && d[k] !== '') return d[k];
+  }
+  return undefined;
+}
+
+function asFloat(v) {
+  if (typeof v === 'number') return v;
+  if (v === undefined || v === null) return null;
+  const s = String(v).replace(/[^\d.,]/g, '').replace(',', '.');
+  const n = parseFloat(s);
+  return Number.isFinite(n) ? n : null;
+}
+
+function normalizeItem(d) {
+  if (!d || typeof d !== 'object') return null;
+  const pid = pick(d, 'productId', 'productid', 'id', 'itemId');
+  const rawTitle = pick(d, 'productTitle', 'title', 'subject', 'name');
+  if (pid === undefined || rawTitle === undefined) return null;
+  const title = String(rawTitle).trim();
+  if (!title || BUNDLE_RE.test(title)) return null;
+  const price = asFloat(pick(d, 'salePrice', 'price', 'finalPrice', 'targetSalePrice', 'sale_price', 'minPrice'));
+  if (price === null) return null;
+  let img = pick(d, 'productImage', 'image', 'imageUrl', 'picUrl', 'imgUrl');
+  img = typeof img === 'string'
+    ? (img.startsWith('http') ? img : 'https:' + img)
+    : null;
+  const rating = asFloat(pick(d, 'rating', 'averageStar', 'evaluateRate', 'star'));
+  const salesRaw = pick(d, 'tradeCount', 'sales', 'sold', 'orders', 'totalSale');
+  const sales = salesRaw !== undefined ? parseInt(String(salesRaw).replace(/[^\d]/g, ''), 10) : NaN;
+  const blob = JSON.stringify(d).toLowerCase();
+  const choice = blob.includes('choice') || blob.includes('choice_day') || blob.includes('superdeals');
+  const freeShipping = blob.includes('free_shipping') || blob.includes('freeshipping') || blob.includes('free shipping');
+  if (!freeShipping) return null;
+  const item = {
+    id: String(pid),
+    title,
+    price: Math.round(price * 100) / 100,
+    currency: 'USD',
+    link: 'https://www.aliexpress.com/item/' + pid + '.html',
+    choice,
+    freeShipping: true
+  };
+  if (img) item.image = img;
+  if (rating) item.rating = rating;
+  if (Number.isFinite(sales)) item.sales = sales;
+  return item;
+}
+
+function extractProducts(pageHtml) {
+  const found = [];
+  const re = /\{[^{}]*?(?:productId|product[idI]|itemId)[^{}]*?\}/g;
+  let m;
+  while ((m = re.exec(pageHtml)) !== null) {
+    let d;
+    try { d = JSON.parse(m[0]); } catch { continue; }
+    const item = normalizeItem(d);
+    if (item) found.push(item);
+  }
+  const seen = new Set();
+  const out = [];
+  for (const it of found) {
+    if (!seen.has(it.id)) {
+      seen.add(it.id);
+      out.push(it);
+      if (out.length >= 30) break;
+    }
+  }
+  return out;
+}
+
+function setStatus(text) {
+  status.hidden = !text;
+  status.textContent = text || '';
+}
+
+function showFallback(query) {
+  const url = searchUrl(query);
+  results.innerHTML = '';
+  setStatus('');
+  const div = document.createElement('div');
+  div.className = 'error';
+  const p = document.createElement('p');
+  p.textContent = 'Search is temporarily unavailable (the proxy or AliExpress blocked the request). No results were invented.';
+  const a = document.createElement('a');
+  a.href = url;
+  a.target = '_blank';
+  a.rel = 'noopener';
+  a.textContent = 'Open filtered search on AliExpress';
+  div.appendChild(p);
+  div.appendChild(a);
+  results.appendChild(div);
+}
+
+function render(items) {
+  results.innerHTML = '';
+  for (const it of items) {
+    const card = document.createElement('article');
+    card.className = 'card';
+    if (it.image) {
+      const img = document.createElement('img');
+      img.src = it.image;
+      img.alt = '';
+      img.loading = 'lazy';
+      card.appendChild(img);
+    }
     const a = document.createElement('a');
+    a.href = it.link;
     a.target = '_blank';
     a.rel = 'noopener';
-    a.href = href;
-    a.textContent = label;
-    links.appendChild(a);
+    a.className = 'title';
+    a.textContent = it.title;
+    const price = document.createElement('div');
+    price.className = 'price';
+    price.textContent = it.price.toFixed(2) + ' ' + it.currency;
+    const meta = document.createElement('div');
+    meta.className = 'meta';
+    const bits = [];
+    if (it.rating) bits.push('Rating: ' + it.rating);
+    if (it.sales !== undefined) bits.push(it.sales + ' sold');
+    meta.textContent = bits.join(' · ');
+    const badges = document.createElement('div');
+    badges.className = 'badges';
+    if (it.choice) {
+      const b = document.createElement('span');
+      b.className = 'badge';
+      b.textContent = 'Choice';
+      badges.appendChild(b);
+    }
+    const fs = document.createElement('span');
+    fs.className = 'badge';
+    fs.textContent = 'Free shipping';
+    badges.appendChild(fs);
+    card.appendChild(a);
+    card.appendChild(price);
+    if (meta.textContent) card.appendChild(meta);
+    card.appendChild(badges);
+    results.appendChild(card);
   }
-  links.hidden = false;
+}
+
+async function runSearch(query) {
+  setStatus('Searching…');
+  results.innerHTML = '';
+  const url = searchUrl(query);
+  let html = '';
+  try {
+    const res = await fetch(PROXY + encodeURIComponent(url));
+    if (!res.ok) throw new Error('proxy status ' + res.status);
+    const data = await res.json();
+    html = data && data.contents ? data.contents : '';
+    if (!html) throw new Error('empty proxy response');
+  } catch {
+    showFallback(query);
+    return;
+  }
+  const low = html.slice(0, 5000).toLowerCase();
+  if (low.includes('captcha') || low.includes('slide to verify') ||
+      (low.includes('login') && !low.includes('productid'))) {
+    showFallback(query);
+    return;
+  }
+  let items = [];
+  try {
+    items = extractProducts(html);
+  } catch {
+    items = [];
+  }
+  if (!items.length) {
+    showFallback(query);
+    return;
+  }
+  setStatus(items.length + ' result(s) for "' + query + '"');
+  render(items);
 }
 
 f.addEventListener('submit', (e) => {
   e.preventDefault();
   const query = q.value.trim();
   if (!query) return;
-  showLinks(query);
-  window.open(searchUrl(query), '_blank', 'noopener');
+  runSearch(query);
 });
 </script>
 </body>
