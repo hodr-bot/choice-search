@@ -191,6 +191,7 @@ function render(items) {
     price.textContent = (it.welcomePrice ? 'from ' : '') + it.price.toFixed(2) + ' ' + it.currency;
     const meta = document.createElement('div');
     meta.className = 'meta';
+    const bits = [];
     if (it.rating) bits.push('Rating: ' + it.rating);
     if (it.sales !== undefined) bits.push(it.sales + ' sold');
     if (it.welcomePrice) bits.push('New-shopper price, check listing');
