@@ -54,11 +54,6 @@ function isAd(url) {
   return url.includes('aem_p4p_detail');
 }
 
-// Bundle-deal links (ssr/BundleDeals) carry no /item/<id>.html: not buyable directly.
-function isBundleLink(url) {
-  return !/\/item\/(\d+)\.html/.test(url);
-}
-
 // Most Jina lines show no shipping info at all, so a missing mention means
 // "unknown", not "paid". Only an explicit paid-shipping price excludes the item.
 function hasPaidShipping(line) {
