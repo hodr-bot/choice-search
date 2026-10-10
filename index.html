@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>choice-search</title>
+<style>
+body { font-family: system-ui, sans-serif; max-width: 800px; margin: 2rem auto; padding: 0 1rem; }
+form { display: flex; gap: .5rem; }
+input { flex: 1; padding: .5rem; font-size: 1rem; }
+button { padding: .5rem 1rem; font-size: 1rem; cursor: pointer; }
+.links { margin-top: 1rem; display: grid; gap: .5rem; }
+.links a { display: block; }
+.hint { color: #555; font-size: .9rem; }
+</style>
+</head>
+<body>
+<h1>choice-search</h1>
+<form id="f">
+<input id="q" type="search" placeholder="Rechercher (ex : esp32)" required autofocus>
+<button type="submit">Chercher</button>
+</form>
+<p class="hint">Ajoutez au panier directement sur AliExpress via le lien de recherche filtrée (expédition depuis la France).</p>
+<noscript><p><a href="https://www.aliexpress.com/wholesale?SearchText=esp32&amp;shipFromCountry=FR&amp;g=y">Exemple : recherche « esp32 » filtrée France sur AliExpress</a></p></noscript>
+<div class="links" id="links" hidden></div>
+<script>
+const BASE = 'https://www.aliexpress.com/wholesale';
+const f = document.getElementById('f');
+const q = document.getElementById('q');
+const links = document.getElementById('links');
+
+function searchUrl(query, extra) {
+  const params = new URLSearchParams({
+    SearchText: query,
+    shipFromCountry: 'FR',
+    g: 'y'
+  });
+  if (extra) for (const [k, v] of Object.entries(extra)) params.set(k, v);
+  return BASE + '?' + params.toString();
+}
+
+function showLinks(query) {
+  const defs = [
+    ['Recherche filtrée (France)', searchUrl(query)],
+    ['Choice : « ' + query + ' choice »', searchUrl(query + ' choice')],
+    ['Triés par commandes', searchUrl(query, { SortType: 'total_tranpro_desc' })]
+  ];
+  links.innerHTML = '';
+  for (const [label, href] of defs) {
+    const a = document.createElement('a');
+    a.target = '_blank';
+    a.rel = 'noopener';
+    a.href = href;
+    a.textContent = label;
+    links.appendChild(a);
+  }
+  links.hidden = false;
+}
+
+f.addEventListener('submit', (e) => {
+  e.preventDefault();
+  const query = q.value.trim();
+  if (!query) return;
+  showLinks(query);
+  window.open(searchUrl(query), '_blank', 'noopener');
+});
+</script>
+</body>
+</html>
